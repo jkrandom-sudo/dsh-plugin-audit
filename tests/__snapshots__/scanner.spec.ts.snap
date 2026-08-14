@@ -1,0 +1,28 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderMarkdownCard > renders a stable snapshot for the clean fixture 1`] = `
+"## Plugin audit: fixture-clean-plugin
+
+**Risk: INFO** — INFO — no elevated capabilities observed
+
+> 1 files scanned; risk=info; 0 findings (0 review, 0 notice, 0 info)
+
+### Permission profile
+
+| Surface | Observed |
+|---|---|
+| Filesystem read | no |
+| Filesystem write | no |
+| Child processes | no |
+| Network | no |
+| Outbound hosts | — |
+| Env variables | — |
+| Credential-looking env | — |
+| Credential paths | — |
+| Dynamic code execution | no |
+| Injected services | \`tools\` |
+| Bundle patch | none |
+
+---
+_Static heuristic audit: evidence for human review, not a verdict. "No findings" is not a guarantee of safety._"
+`;

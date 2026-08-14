@@ -1,0 +1,14 @@
+# Bundle patch applied over the selected DSH profile when this package is listed
+# in `dsh.profile.bundles`. The row id is deployment-local; the package name
+# must match package.json.
+
+- insert:
+    - id: dsh-plugin-audit
+      name: 'dsh-plugin-audit'
+      config:
+        sentinelEnabled: true
+
+    # NOTE: the ./invariant companion is exported but intentionally not wired
+    # here — the stock web/base profiles do not provide the `invariants`
+    # service, and a pending row blocks boot. Profiles that do provide it can
+    # add a row: { id: dsh-plugin-audit-invariant, name: 'dsh-plugin-audit/invariant' }.
