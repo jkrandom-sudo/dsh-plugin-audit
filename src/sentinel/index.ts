@@ -13,6 +13,9 @@ export type { SentinelRuleConfig, SentinelVerdict } from './rules.ts'
 /** Minimal shape of the pending call the pipeline waterfall hands over. */
 interface PendingExecution {
   name?: string
+  /** The host execution object carries parsed tool arguments here. */
+  arguments?: unknown
+  /** Legacy/test-shape fallback. */
   args?: unknown
 }
 
@@ -41,7 +44,7 @@ export function installSentinel(
   log: (message: string) => void = message => { ctx.logger.info(message) },
 ): () => void {
   const listener = async (exec: PendingExecution, next: WaterfallNext): Promise<PreToolDecision> => {
-    const verdict = evaluateCall(exec.name ?? '', exec.args, config)
+    const verdict = evaluateCall(exec.name ?? '', exec.arguments ?? exec.args, config)
     if (verdict.action === 'ask') {
       log(`sentinel: ask — ${verdict.reason}`)
       return { kind: 'ask', reason: verdict.reason }
@@ -49,7 +52,7 @@ export function installSentinel(
     return next()
   }
   // ctx.on returns its own disposer; the fiber also auto-disposes listeners.
-  const off = ctx.on('tools/pre-execute' as never, listener as never) as () => boolean
+  const off = ctx.on('tools/pre-execute' as never, listener as never) as () => unknown
   return () => {
     off()
   }

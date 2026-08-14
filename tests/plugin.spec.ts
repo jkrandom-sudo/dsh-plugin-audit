@@ -66,6 +66,22 @@ describe('dsh-plugin-audit', () => {
     await harness.dispose()
   })
 
+  it('renders the structured report when format is "json"', async () => {
+    const harness = await createPluginHarness()
+    const definition = harness.tools.registered[0] as {
+      execute(args: unknown, exec: unknown): Promise<unknown>
+    }
+    const value = await definition.execute(
+      { path: path.join(fixtures, 'clean-plugin'), format: 'json' },
+      undefined,
+    ) as { markdown: string; risk: string }
+
+    const parsed = JSON.parse(value.markdown) as { risk: string; findings: unknown[] }
+    expect(parsed.risk).toBe('info')
+    expect(parsed.findings).toEqual([])
+    await harness.dispose()
+  })
+
   it('rejects tool calls without a path', async () => {
     const harness = await createPluginHarness()
     const definition = harness.tools.registered[0] as {
@@ -80,14 +96,14 @@ describe('dsh-plugin-audit', () => {
 
     const risky = await dispatchPreExecute(harness.ctx, {
       name: 'bash',
-      args: { command: 'cat ~/.ssh/id_rsa' },
+      arguments: { command: 'cat ~/.ssh/id_rsa' },
     })
     expect(risky.kind).toBe('ask')
     expect(risky.reason).toContain('.ssh')
 
     const clean = await dispatchPreExecute(harness.ctx, {
       name: 'bash',
-      args: { command: 'pnpm test' },
+      arguments: { command: 'pnpm test' },
     })
     expect(clean.kind).toBe('allow')
     await harness.dispose()
@@ -97,7 +113,7 @@ describe('dsh-plugin-audit', () => {
     const harness = await createPluginHarness({ sentinelEnabled: false })
     const decision = await dispatchPreExecute(harness.ctx, {
       name: 'bash',
-      args: { command: 'cat ~/.ssh/id_rsa' },
+      arguments: { command: 'cat ~/.ssh/id_rsa' },
     })
     expect(decision.kind).toBe('allow')
     expect(harness.info).toHaveBeenCalledWith(expect.stringContaining('sentinel disabled'))
@@ -111,7 +127,7 @@ describe('dsh-plugin-audit', () => {
 
     const decision = await dispatchPreExecute(harness.ctx, {
       name: 'bash',
-      args: { command: 'cat ~/.ssh/id_rsa' },
+      arguments: { command: 'cat ~/.ssh/id_rsa' },
     })
     expect(decision.kind).toBe('allow')
   })
@@ -173,6 +189,17 @@ describe('dsh-plugin-audit', () => {
       { value: { writesPerformed: true } },
       async () => ({ kind: 'accept' }),
     )).rejects.toThrow('read-only marker')
+    expect(fail).toHaveBeenCalledTimes(1)
+
+    // Error results carry no value — a routine tool failure (e.g. a missing
+    // path argument) is not audit output and must not trip the invariant.
+    const errored = await dispatch(
+      'tools/post-execute',
+      { name: 'plugin_audit' },
+      { isError: true },
+      async () => ({ kind: 'accept' }),
+    )
+    expect(errored.kind).toBe('accept')
     expect(fail).toHaveBeenCalledTimes(1)
 
     await fiber.dispose()

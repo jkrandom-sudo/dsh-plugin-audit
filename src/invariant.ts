@@ -34,6 +34,8 @@ interface AuditExecution {
 }
 
 interface AuditResultValue {
+  /** Failed tool calls carry isError and no value — they are not audit output. */
+  isError?: boolean
   value?: { writesPerformed?: boolean }
 }
 
@@ -50,7 +52,11 @@ const install: InvariantInstaller = (ctx, fail) => {
     result: AuditResultValue,
     next: () => Promise<PostToolDecision>,
   ): Promise<PostToolDecision> => {
-    if (exec?.name === 'plugin_audit' && result?.value?.writesPerformed !== false) {
+    if (
+      exec?.name === 'plugin_audit'
+      && result?.isError !== true
+      && result?.value?.writesPerformed !== false
+    ) {
       fail('plugin_audit result lost its read-only marker (writesPerformed !== false)')
     }
     return next()

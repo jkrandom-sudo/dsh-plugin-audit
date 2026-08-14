@@ -117,10 +117,12 @@ export function createPluginAuditTool(): Parameters<ToolRegistry['register']>[0]
       },
     },
     execute: async (args) => {
-      const { path: target } = narrowArgs(args)
+      const { path: target, format } = narrowArgs(args)
       const report = await auditPlugin(target)
       const value: PluginAuditValue = {
-        markdown: renderMarkdownCard(report),
+        // The markdown field carries the model-facing rendering: the permission
+        // card, or the pretty-printed structured report when format is "json".
+        markdown: format === 'json' ? JSON.stringify(report, null, 2) : renderMarkdownCard(report),
         risk: report.risk,
         filesScanned: report.target.filesScanned,
         findingsCount: report.findings.length,
