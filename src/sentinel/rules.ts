@@ -1,0 +1,128 @@
+/**
+ * Pure decision rules for the runtime sentinel.
+ *
+ * Kept harness-free so the rule set is unit-testable without a Cordis context
+ * and reusable by other harness adapters.
+ * @module dsh-plugin-audit/sentinel/rules
+ */
+
+/** What the sentinel decided about one pending tool call. */
+export type SentinelVerdict =
+  | { action: 'pass' }
+  | { action: 'ask'; reason: string }
+
+/** Rule inputs needed to evaluate one call. */
+export interface SentinelRuleConfig {
+  /** Hosts treated as pre-approved (exact or leading `*.` suffix match). */
+  allowedHosts: string[]
+}
+
+/** Credential-bearing path fragments mirrored from the static scanner. */
+const CREDENTIAL_PATH = /(\.ssh|\.aws|\.gnupg|\.git-credentials|\.netrc|\.npmrc|id_rsa|id_ed25519|keychain|\.docker\/config\.json)/i
+
+/** Tools whose arguments are shell command text. */
+const SHELL_TOOLS = new Set(['bash', 'pwsh', 'terminal_send'])
+
+/** Shell commands that move data across the network. */
+const EGRESS_COMMAND = /\b(curl|wget|nc|ncat|scp|rsync|sftp|ftp)\b/
+
+/** Host inside an explicit URL. */
+const URL_HOST = /https?:\/\/([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::\d+)?/gi
+
+/** Host-like tokens inside a shell command (fallback when no URL is present). */
+const HOST_TOKEN = /\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?::\d+)?\b/gi
+
+function hostAllowed(host: string, allowedHosts: string[]): boolean {
+  const normalized = host.toLowerCase()
+  return allowedHosts.some(entry => {
+    const rule = entry.toLowerCase()
+    if (rule.startsWith('*.')) {
+      const suffix = rule.slice(1)
+      return normalized.endsWith(suffix) || normalized === rule.slice(2)
+    }
+    return normalized === rule
+  })
+}
+
+function shellCommandOf(args: unknown): string | undefined {
+  if (typeof args !== 'object' || args === null) return undefined
+  const record = args as Record<string, unknown>
+  for (const key of ['command', 'input', 'text', 'data']) {
+    const value = record[key]
+    if (typeof value === 'string') return value
+  }
+  return undefined
+}
+
+function serialized(args: unknown): string {
+  try {
+    return JSON.stringify(args) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Evaluate one pending tool call against the sentinel rule set.
+ * @param name - Registered tool name (e.g. `bash`, `read`).
+ * @param args - Parsed tool arguments.
+ * @param config - Sentinel rule configuration.
+ * @returns `pass` to delegate, or `ask` with a human-readable reason.
+ */
+export function evaluateCall(name: string, args: unknown, config: SentinelRuleConfig): SentinelVerdict {
+  const text = serialized(args)
+
+  // Rule 1: any tool call touching credential-bearing paths.
+  const credentialMatch = CREDENTIAL_PATH.exec(text)
+  if (credentialMatch?.[1]) {
+    return {
+      action: 'ask',
+      reason: `Tool "${name}" references the credential path "${credentialMatch[1]}". Approve only if you expected this access.`,
+    }
+  }
+
+  // Rule 2: shell egress toward hosts outside the allowlist. Explicit URLs
+  // take precedence; bare host tokens are a fallback so filenames like
+  // "data.json" are not mistaken for destinations.
+  if (SHELL_TOOLS.has(name)) {
+    const command = shellCommandOf(args)
+    if (command && EGRESS_COMMAND.test(command)) {
+      const executable = EGRESS_COMMAND.exec(command)?.[1] ?? 'network command'
+      const hosts: string[] = []
+      URL_HOST.lastIndex = 0
+      let urlMatch: RegExpExecArray | null
+      while ((urlMatch = URL_HOST.exec(command)) !== null) {
+        if (urlMatch[1]) hosts.push(urlMatch[1])
+      }
+      if (hosts.length === 0) {
+        HOST_TOKEN.lastIndex = 0
+        let hostMatch: RegExpExecArray | null
+        while ((hostMatch = HOST_TOKEN.exec(command)) !== null) {
+          if (hostMatch[1]) hosts.push(hostMatch[1])
+        }
+      }
+      for (const host of hosts) {
+        if (!hostAllowed(host, config.allowedHosts)) {
+          return {
+            action: 'ask',
+            reason: `Tool "${name}" runs ${executable} toward "${host}", which is not in allowedHosts. Outbound data movement needs your confirmation.`,
+          }
+        }
+      }
+    }
+  }
+
+  // Rule 3: path-carrying tools aimed at home-directory dotfiles outside the
+  // credential list still deserve a heads-up when they write.
+  if ((name === 'write' || name === 'edit' || name === 'str_replace_editor') && /(^|[\\/])\.[a-z]/i.test(text)) {
+    const dotfile = /([~/][^"'\s]*\.[a-z][^"'\s]*)/i.exec(text)?.[1]
+    if (dotfile && !CREDENTIAL_PATH.test(dotfile)) {
+      return {
+        action: 'ask',
+        reason: `Tool "${name}" writes to the dotfile path "${dotfile}" outside the workspace. Confirm this configuration change.`,
+      }
+    }
+  }
+
+  return { action: 'pass' }
+}

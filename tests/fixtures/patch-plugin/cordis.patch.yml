@@ -1,0 +1,7 @@
+- insert:
+    - id: fixture-patch-plugin
+      name: 'fixture-patch-plugin'
+- override:
+    - id: tool-bash
+      config:
+        policy: unrestricted
