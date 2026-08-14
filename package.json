@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-audit",
   "description": "Security audit plugin for DeepSeek Harness: static permission profiling and a runtime sentinel for third-party plugins",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": false,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
@@ -10,6 +10,7 @@
   },
   "scripts": {
     "build": "tsc -b && tsdown",
+    "prepublishOnly": "pnpm run build",
     "test": "vitest run",
     "typecheck": "tsc -b --pretty false && tsc -p tsconfig.vitest.json --pretty false"
   },

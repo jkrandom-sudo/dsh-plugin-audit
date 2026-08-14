@@ -164,40 +164,31 @@ describe('dsh-plugin-audit', () => {
     })
     installer!(ctx, fail)
 
-    type Decision = { kind: string }
-    const dispatch = ctx.waterfall as (
-      name: string,
+    const dispatch = (
       exec: { name: string },
       result: { isError?: boolean; value?: { writesPerformed?: boolean } },
-      inner: () => Promise<Decision>,
-    ) => Promise<Decision>
+    ) => ctx.waterfall('tools/post-execute', exec, result, async () => ({ kind: 'accept' as const }))
 
     // A conforming audit result passes through untouched.
     const ok = await dispatch(
-      'tools/post-execute',
       { name: 'plugin_audit' },
       { value: { writesPerformed: false } },
-      async () => ({ kind: 'accept' }),
     )
     expect(ok.kind).toBe('accept')
     expect(fail).not.toHaveBeenCalled()
 
     // A result that lost the marker trips the invariant.
     await expect(dispatch(
-      'tools/post-execute',
       { name: 'plugin_audit' },
       { value: { writesPerformed: true } },
-      async () => ({ kind: 'accept' }),
     )).rejects.toThrow('read-only marker')
     expect(fail).toHaveBeenCalledTimes(1)
 
     // Error results carry no value — a routine tool failure (e.g. a missing
     // path argument) is not audit output and must not trip the invariant.
     const errored = await dispatch(
-      'tools/post-execute',
       { name: 'plugin_audit' },
       { isError: true },
-      async () => ({ kind: 'accept' }),
     )
     expect(errored.kind).toBe('accept')
     expect(fail).toHaveBeenCalledTimes(1)

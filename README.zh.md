@@ -11,29 +11,33 @@
 ```markdown
 ## Plugin audit: fixture-suspicious-plugin
 
-**Risk: REVIEW** — human review recommended before installing
+**Risk: REVIEW** — REVIEW — human review recommended before installing
 
-> 1 files scanned; 10 findings (4 review, 4 notice, 2 info)
+> 1 files scanned; risk=review; 10 findings (4 review, 4 notice, 2 info)
 
 ### Permission profile
 
 | Surface | Observed |
 |---|---|
-| Filesystem read / write | **yes / yes** |
+| Filesystem read | **yes** |
+| Filesystem write | **yes** |
 | Child processes | **yes** |
+| Network | **yes** |
 | Outbound hosts | `evil.example.com`, `exfil.badhost.io`, `telemetry.example.net` |
+| Env variables | `GITHUB_TOKEN`, `HOME` |
 | Credential-looking env | `GITHUB_TOKEN` |
 | Credential paths | `.npmrc`, `.ssh` |
 | Dynamic code execution | **yes** |
 | Injected services | `credentials`, `tools` |
+| Declared dependencies | — |
+| Bundle patch | none |
 
 ### Findings
 
 | severity | capability | location | detail |
 |---|---|---|---|
+| review | env-access | `src/index.js` | Reads a credential-looking environment variable. |
 | review | credential-access | `src/index.js:12` | References a credential-bearing path. |
-| review | dynamic-exec | `src/index.js:23` | Evaluates dynamically constructed code. |
-| notice | network | `src/index.js:19` | Calls the global fetch API. |
 | … | … | … | … |
 ```
 
@@ -135,6 +139,12 @@ bundle patch 向 profile 插入一行；在 profile 的 `cordis.patch.yml` 中�
 - **正常命令频繁触发询问** —— 把主机加入 `allowedHosts`，或设 `sentinelEnabled: false` 只保留静态审计。
 - **扫描文件比预期少** —— 遍历上限 400 文件 / 256 KB 且跳过构建产物；请审计包的源码目录。
 
+### 已知边界
+
+- **不跟随 symlink 目标** —— 遍历只读目标树内的真实文件。
+- **字符串与注释也会触发发现** —— 扫描器基于源码文本而非 AST；注释里的凭证路径与真实代码同等上报。这是有意为之：卡片是供人判断的证据，宁多勿漏。
+- **只含构建产物的包至少为 NOTICE** —— 当只发布 `dist`/`lib` 时没有源码可扫，卡片会如实说明，而不是给出干净结论。
+
 ## 开发
 
 ```bash
@@ -144,7 +154,9 @@ pnpm test        # vitest：scanner、哨兵规则、插件生命周期、invari
 pnpm build       # tsc -b && tsdown -> lib/
 ```
 
-目录结构：`src/scanner/` 是与 harness 无关的纯引擎（walk → detect → manifest → report），`src/report.ts` 渲染 Markdown 卡，`src/runtime.ts` 适配 Cordis/DSH 工具契约，`src/sentinel/` 存放纯决策规则与 waterfall 监听器，`src/invariant.ts` 是只读强制伴随插件。`tests/fixtures/` 内含测试用样本插件（可疑 / 干净 / 含 patch override）。
+目录结构：`src/scanner/` 是与 harness 无关的纯引擎（walk → detect → manifest → report），`src/report.ts` 渲染 Markdown 卡，`src/runtime.ts` 适配 Cordis/DSH 工具契约，`src/sentinel/` 存放纯决策规则与 waterfall 监听器，`src/invariant.ts` 是只读强制伴随插件，`src/events.ts` 为宿主工具管线 waterfall 提供类型（监听器形状在编译期受检）。`tests/fixtures/` 内含测试用样本插件（可疑 / 干净 / 含 patch override）。
+
+本包同时发布 TypeScript 源码并提供 `./src/*` export，遵循官方 [`dsh-external/plugin-template`](https://github.com/dsh-external/plugin-template) 约定：DSH 的开发工具可以直接从源码加载 link 安装的插件（例如插件开发时的 HMR），无需等待重新构建。
 
 ## 许可与安全
 

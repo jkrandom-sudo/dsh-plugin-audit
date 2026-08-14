@@ -56,11 +56,5 @@ export function dispatchPreExecute(
   ctx: Context,
   exec: { name: string; arguments: unknown },
 ): Promise<{ kind: string; reason?: string }> {
-  type Decision = { kind: string; reason?: string }
-  const dispatch = ctx.waterfall as (
-    name: string,
-    exec: { name: string; arguments: unknown },
-    inner: () => Promise<Decision>,
-  ) => Promise<Decision>
-  return dispatch('tools/pre-execute', exec, async () => ({ kind: 'allow' }))
+  return ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'allow' as const }))
 }

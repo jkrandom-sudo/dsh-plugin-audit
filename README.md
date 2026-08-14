@@ -11,29 +11,33 @@
 ```markdown
 ## Plugin audit: fixture-suspicious-plugin
 
-**Risk: REVIEW** — human review recommended before installing
+**Risk: REVIEW** — REVIEW — human review recommended before installing
 
-> 1 files scanned; 10 findings (4 review, 4 notice, 2 info)
+> 1 files scanned; risk=review; 10 findings (4 review, 4 notice, 2 info)
 
 ### Permission profile
 
 | Surface | Observed |
 |---|---|
-| Filesystem read / write | **yes / yes** |
+| Filesystem read | **yes** |
+| Filesystem write | **yes** |
 | Child processes | **yes** |
+| Network | **yes** |
 | Outbound hosts | `evil.example.com`, `exfil.badhost.io`, `telemetry.example.net` |
+| Env variables | `GITHUB_TOKEN`, `HOME` |
 | Credential-looking env | `GITHUB_TOKEN` |
 | Credential paths | `.npmrc`, `.ssh` |
 | Dynamic code execution | **yes** |
 | Injected services | `credentials`, `tools` |
+| Declared dependencies | — |
+| Bundle patch | none |
 
 ### Findings
 
 | severity | capability | location | detail |
 |---|---|---|---|
+| review | env-access | `src/index.js` | Reads a credential-looking environment variable. |
 | review | credential-access | `src/index.js:12` | References a credential-bearing path. |
-| review | dynamic-exec | `src/index.js:23` | Evaluates dynamically constructed code. |
-| notice | network | `src/index.js:19` | Calls the global fetch API. |
 | … | … | … | … |
 ```
 
@@ -135,6 +139,12 @@ The static scanner takes no configuration and ignores `allowedHosts` — it repo
 - **Legitimate commands keep asking** — add the host to `allowedHosts`, or set `sentinelEnabled: false` to keep only the static auditor.
 - **Fewer files scanned than expected** — the walker caps at 400 files / 256 KB and skips build output; audit the package source, not an installed copy.
 
+### Known boundaries
+
+- **Symlink targets are not followed** — the walk reads real files inside the target tree only.
+- **Strings and comments can trigger findings** — the scanner works on source text, not an AST; a credential path inside a comment is reported the same as one in live code. That is deliberate: the card is evidence for a human, and over-reporting is the safe direction.
+- **Build-output-only packages always score at least NOTICE** — when `dist`/`lib` are the only code shipped there is nothing to scan, and the card says so instead of showing a clean bill.
+
 ## Development
 
 ```bash
@@ -144,7 +154,9 @@ pnpm test        # vitest: scanner, sentinel rules, plugin lifecycle, invariant
 pnpm build       # tsc -b && tsdown -> lib/
 ```
 
-Layout: `src/scanner/` is a harness-agnostic pure engine (walk → detect → manifest → report), `src/report.ts` renders the Markdown card, `src/runtime.ts` adapts it to the Cordis/DSH tool contract, `src/sentinel/` holds the pure decision rules and the waterfall listener, `src/invariant.ts` is the read-only enforcement companion. `tests/fixtures/` contains sample plugins (suspicious / clean / patch-override) used by the test suite.
+Layout: `src/scanner/` is a harness-agnostic pure engine (walk → detect → manifest → report), `src/report.ts` renders the Markdown card, `src/runtime.ts` adapts it to the Cordis/DSH tool contract, `src/sentinel/` holds the pure decision rules and the waterfall listener, `src/invariant.ts` is the read-only enforcement companion, and `src/events.ts` types the host's tool-pipeline waterfalls (so listener shapes are checked at compile time). `tests/fixtures/` contains sample plugins (suspicious / clean / patch-override) used by the test suite.
+
+The package also ships its TypeScript sources and a `./src/*` export, following the official [`dsh-external/plugin-template`](https://github.com/dsh-external/plugin-template) convention: DSH's development tooling can load a linked plugin straight from source (e.g. for HMR during plugin development), without waiting for a rebuild.
 
 ## License & security
 
