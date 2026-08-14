@@ -1,0 +1,11 @@
+node_modules/
+lib/
+dist/
+*.tsbuildinfo
+*.tgz
+*.log
+.DS_Store
+.npmrc
+CLAUDE.md
+coverage/
+.pnpm-store/
