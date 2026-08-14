@@ -168,7 +168,7 @@ describe('dsh-plugin-audit', () => {
     const dispatch = ctx.waterfall as (
       name: string,
       exec: { name: string },
-      result: { value?: { writesPerformed?: boolean } },
+      result: { isError?: boolean; value?: { writesPerformed?: boolean } },
       inner: () => Promise<Decision>,
     ) => Promise<Decision>
 

@@ -59,8 +59,8 @@ export async function auditPlugin(dir: string): Promise<AuditReport> {
         case 'network': network = true; break
         case 'dynamic-exec': dynamicExec = true; break
         case 'credential-access': {
-          const match = /(\.ssh|\.aws|\.gnupg|\.git-credentials|\.netrc|\.npmrc|id_rsa|id_ed25519|keychain|\.docker\/config\.json)/i.exec(finding.evidence)
-          credentialPaths.add(match?.[1] ?? finding.evidence)
+          // Prefer the exact matched fragment over re-parsing truncated evidence.
+          credentialPaths.add(finding.match ?? finding.evidence)
           break
         }
         default: break
@@ -72,9 +72,22 @@ export async function auditPlugin(dir: string): Promise<AuditReport> {
     for (const service of detection.inject) inject.add(service)
   }
 
+  // A plugin that ships only build output (dist/lib are skipped) would
+  // otherwise receive a clean info card with zero evidence behind it.
+  if (walk.files.length === 0) {
+    findings.push({
+      capability: 'manifest',
+      severity: 'notice',
+      file: '(walk)',
+      evidence: '0 source files scanned',
+      detail: 'No source files were scanned (build-output directories are skipped); '
+        + 'review the shipped artifacts manually before installing.',
+    })
+  }
+
   findings.sort((a, b) =>
     severityRank(b.severity) - severityRank(a.severity)
-    || a.file.localeCompare(b.file)
+    || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0)
     || (a.line ?? 0) - (b.line ?? 0),
   )
 
@@ -95,6 +108,7 @@ export async function auditPlugin(dir: string): Promise<AuditReport> {
     filesScanned: walk.files.length,
     truncated: walk.truncated,
   }
+  if (walk.skippedUnreadable > 0) target.skippedUnreadable = walk.skippedUnreadable
   if (manifest.name !== undefined) target.name = manifest.name
   if (manifest.version !== undefined) target.version = manifest.version
 
@@ -111,6 +125,7 @@ export async function auditPlugin(dir: string): Promise<AuditReport> {
       credentialPaths: [...credentialPaths].sort(),
       dynamicExec,
       inject: [...inject].sort(),
+      dependencies: [...manifest.dependencies].sort(),
       patch: manifest.patch,
     },
     findings,

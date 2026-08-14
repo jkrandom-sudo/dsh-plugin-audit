@@ -22,7 +22,8 @@ export interface ManifestAnalysis {
   findings: Finding[]
 }
 
-const PATCH_ROW = /^\s*-\s*(insert|override|delete)\s*:/
+/** Top-level patch rows only — nested config list items are indented. */
+const PATCH_ROW = /^-\s*(insert|override|delete)\s*:/
 
 /**
  * Inspect the two manifest files a DSH plugin ships.
