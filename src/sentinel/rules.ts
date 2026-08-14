@@ -6,6 +6,8 @@
  * @module dsh-plugin-audit/sentinel/rules
  */
 
+import { CREDENTIAL_PATH } from '../scanner/patterns.ts'
+
 /** What the sentinel decided about one pending tool call. */
 export type SentinelVerdict =
   | { action: 'pass' }
@@ -16,9 +18,6 @@ export interface SentinelRuleConfig {
   /** Hosts treated as pre-approved (exact or leading `*.` suffix match). */
   allowedHosts: string[]
 }
-
-/** Credential-bearing path fragments mirrored from the static scanner. */
-const CREDENTIAL_PATH = /(\.ssh|\.aws|\.gnupg|\.git-credentials|\.netrc|\.npmrc|id_rsa|id_ed25519|keychain|\.docker\/config\.json)/i
 
 /** Tools whose arguments are shell command text. */
 const SHELL_TOOLS = new Set(['bash', 'pwsh', 'terminal_send'])
@@ -31,6 +30,16 @@ const URL_HOST = /https?:\/\/([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?)(?::\d+)?/gi
 
 /** Host-like tokens inside a shell command (fallback when no URL is present). */
 const HOST_TOKEN = /\b((?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,})(?::\d+)?\b/gi
+
+/**
+ * Tokens ending in a known file extension are files, not destinations — this
+ * keeps `curl -o out.json` / `scp data.log …` style commands from producing
+ * false-positive asks in the no-URL fallback path.
+ */
+const FILE_EXTENSION = /\.(json|txt|log|md|ya?ml|xml|csv|ts|tsx|jsx?|mjs|cjs|py|lock|html?|css|map|sh|gz|zip|tar|env|pem|key|crt)$/i
+
+/** Home-directory dotfile targets: ~/…, $HOME/…, or absolute /Users|/home paths. */
+const HOME_DOTFILE = /(?:~|\$HOME|\{HOME\})\/\.[A-Za-z]|\/(?:Users|home)\/[^/\s"']+\/\.[A-Za-z]/i
 
 function hostAllowed(host: string, allowedHosts: string[]): boolean {
   const normalized = host.toLowerCase()
@@ -98,7 +107,7 @@ export function evaluateCall(name: string, args: unknown, config: SentinelRuleCo
         HOST_TOKEN.lastIndex = 0
         let hostMatch: RegExpExecArray | null
         while ((hostMatch = HOST_TOKEN.exec(command)) !== null) {
-          if (hostMatch[1]) hosts.push(hostMatch[1])
+          if (hostMatch[1] && !FILE_EXTENSION.test(hostMatch[1])) hosts.push(hostMatch[1])
         }
       }
       for (const host of hosts) {
@@ -112,14 +121,14 @@ export function evaluateCall(name: string, args: unknown, config: SentinelRuleCo
     }
   }
 
-  // Rule 3: path-carrying tools aimed at home-directory dotfiles outside the
-  // credential list still deserve a heads-up when they write.
-  if ((name === 'write' || name === 'edit' || name === 'str_replace_editor') && /(^|[\\/])\.[a-z]/i.test(text)) {
-    const dotfile = /([~/][^"'\s]*\.[a-z][^"'\s]*)/i.exec(text)?.[1]
-    if (dotfile && !CREDENTIAL_PATH.test(dotfile)) {
+  // Rule 3: path-carrying write tools aimed at home-directory dotfiles
+  // (credential paths already returned via rule 1).
+  if (name === 'write' || name === 'edit' || name === 'str_replace_editor') {
+    const dotfile = HOME_DOTFILE.exec(text)?.[0]
+    if (dotfile) {
       return {
         action: 'ask',
-        reason: `Tool "${name}" writes to the dotfile path "${dotfile}" outside the workspace. Confirm this configuration change.`,
+        reason: `Tool "${name}" writes to the home-directory dotfile path "${dotfile}". Confirm this configuration change.`,
       }
     }
   }

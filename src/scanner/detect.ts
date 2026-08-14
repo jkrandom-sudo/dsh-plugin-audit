@@ -1,19 +1,15 @@
 /**
  * Heuristic capability detection over collected source files.
  *
- * The scanner is a static aid, not a judge: it pairs module imports with
- * call-site patterns and records every match as inspectable evidence.
+ * The scanner is a static aid, not a judge: it parses import bindings
+ * (including aliases) and matches call sites against the bound names, then
+ * records every match as inspectable evidence.
  * @module dsh-plugin-audit/scanner/detect
  */
 
+import { CREDENTIAL_PATH, SENSITIVE_ENV } from './patterns.ts'
 import type { Capability, Finding, Severity } from './types.ts'
 import type { SourceFile } from './walk.ts'
-
-/** Env var names that look credential-bearing. */
-const SENSITIVE_ENV = /TOKEN|KEY|SECRET|PASSW|CREDENTIAL|AUTH|COOKIE|SESSION/i
-
-/** Path fragments that usually hold credentials or identities. */
-const CREDENTIAL_PATH = /(\.ssh|\.aws|\.gnupg|\.git-credentials|\.netrc|\.npmrc|id_rsa|id_ed25519|keychain|\.docker\/config\.json)/i
 
 /** Module specifiers grouped by capability family. */
 const MODULES = {
@@ -28,51 +24,83 @@ const MODULES = {
   ]),
 }
 
-interface Rule {
+/** One capability family: the module specifiers and the methods that count. */
+interface FamilyRule {
   capability: Capability
   severity: Severity
-  /** Module families that must be imported for the pattern to match. */
-  requires?: ReadonlySet<string>[]
-  pattern: RegExp
+  family: ReadonlySet<string>
+  /** Exported names whose use is evidence of the capability. */
+  methods: string[]
   detail: string
 }
 
-const RULES: Rule[] = [
+const FAMILY_RULES: FamilyRule[] = [
   {
     capability: 'fs-read',
     severity: 'info',
-    requires: [MODULES.fs],
-    pattern: /\b(readFileSync|readFile|createReadStream|readdirSync|readdir|statSync|lstatSync|readlinkSync|accessSync|watch)\s*\(/,
+    family: MODULES.fs,
+    methods: [
+      'readFileSync', 'readFile', 'createReadStream', 'readdirSync', 'readdir',
+      'statSync', 'stat', 'lstatSync', 'lstat', 'readlinkSync', 'readlink',
+      'accessSync', 'access', 'watch', 'open', 'read', 'opendir', 'existsSync',
+    ],
     detail: 'Reads files from the filesystem.',
   },
   {
     capability: 'fs-write',
     severity: 'notice',
-    requires: [MODULES.fs],
-    pattern: /\b(writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|mkdirSync|rmSync|unlinkSync|renameSync|copyFileSync|chmodSync|chownSync)\s*\(/,
+    family: MODULES.fs,
+    methods: [
+      'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile',
+      'createWriteStream', 'mkdirSync', 'mkdir', 'rmSync', 'rm', 'rmdirSync',
+      'rmdir', 'unlinkSync', 'unlink', 'renameSync', 'rename', 'copyFileSync',
+      'copyFile', 'chmodSync', 'chmod', 'chownSync', 'chown', 'truncateSync',
+      'truncate', 'cpSync', 'cp', 'symlinkSync', 'symlink', 'utimesSync', 'utimes',
+    ],
     detail: 'Writes to the filesystem.',
   },
   {
     capability: 'subprocess',
     severity: 'notice',
-    requires: [MODULES.childProcess],
-    pattern: /\b(execSync|execFileSync|spawnSync|exec|execFile|spawn|fork)\s*\(/,
+    family: MODULES.childProcess,
+    methods: ['execSync', 'execFileSync', 'spawnSync', 'exec', 'execFile', 'spawn', 'fork'],
     detail: 'Spawns child processes.',
   },
   {
     capability: 'network',
     severity: 'notice',
-    requires: [MODULES.http],
-    pattern: /\b(request|get|createServer|createSecureServer)\s*\(/,
+    family: MODULES.http,
+    methods: ['request', 'get', 'createServer', 'createSecureServer'],
     detail: 'Uses the http/https module.',
   },
   {
     capability: 'network',
     severity: 'notice',
-    requires: [MODULES.net],
-    pattern: /\b(connect|createConnection|createServer)\s*\(/,
+    family: MODULES.net,
+    methods: ['connect', 'createConnection', 'createServer'],
     detail: 'Opens raw network connections.',
   },
+  {
+    capability: 'dynamic-exec',
+    severity: 'review',
+    family: MODULES.vm,
+    methods: [
+      'runInThisContext', 'runInNewContext', 'runInContext', 'compileFunction',
+      'Script', 'createContext', 'measureMemory',
+    ],
+    detail: 'Executes code through the vm module.',
+  },
+]
+
+/** Capability rules that need no module import. */
+interface StaticRule {
+  capability: Capability
+  severity: Severity
+  pattern: RegExp
+  detail: string
+}
+
+const STATIC_RULES: StaticRule[] = [
   {
     capability: 'network',
     severity: 'notice',
@@ -92,13 +120,6 @@ const RULES: Rule[] = [
     detail: 'Evaluates dynamically constructed code.',
   },
   {
-    capability: 'dynamic-exec',
-    severity: 'review',
-    requires: [MODULES.vm],
-    pattern: /\bvm\.(runInThisContext|runInNewContext|runInContext|compileFunction|Script)/,
-    detail: 'Executes code through the vm module.',
-  },
-  {
     capability: 'credential-access',
     severity: 'review',
     pattern: CREDENTIAL_PATH,
@@ -106,13 +127,150 @@ const RULES: Rule[] = [
   },
 ]
 
-const IMPORT_FROM = /\bimport\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/g
-const REQUIRE_CALL = /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+const IDENT = '[A-Za-z_$][\\w$]*'
+
+const IMPORT_TYPE = /^\s*import\s+type\b/
+const IMPORT_NS = new RegExp(`\\bimport\\s+\\*\\s+as\\s+(${IDENT})\\s+from\\s*['"]([^'"]+)['"]`, 'g')
+const IMPORT_NAMED = /\bimport\s+\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g
+const IMPORT_DEFAULT = new RegExp(
+  `\\bimport\\s+(${IDENT})\\s*(?:,\\s*\\{([^}]*)\\})?\\s*(?:,\\s*\\*\\s*as\\s+(${IDENT})\\s*)?from\\s*['"]([^'"]+)['"]`,
+  'g',
+)
+const IMPORT_SIDE_EFFECT = /\bimport\s*['"]([^'"]+)['"]/g
+const REQUIRE_NS = new RegExp(`\\b(?:const|let|var)\\s+(${IDENT})\\s*=\\s*require\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)`, 'g')
+const REQUIRE_NAMED = /\b(?:const|let|var)\s+\{([^}]*)\}\s*=\s*require\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+const AWAIT_IMPORT_NS = new RegExp(
+  `\\b(?:const|let|var)\\s+(${IDENT})\\s*=\\s*await\\s+import\\s*\\(\\s*['"]([^'"]+)['"]\\s*\\)`,
+  'g',
+)
 const DYNAMIC_IMPORT = /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g
+const EXPORT_FROM = /\bexport\s+(?:\*|\{[^}]*\})\s*from\s*['"]([^'"]+)['"]/g
+/** Any module-specifier use on a line, for network-library flagging. */
+const SPECIFIER_USE = /\b(?:from\s+|require\s*\(\s*|import\s*\(\s*|import\s+)['"]([^'"]+)['"]/g
+
 const ENV_DOT = /process\.env\.([A-Za-z_][A-Za-z0-9_]*)/g
 const ENV_INDEX = /process\.env\[['"]([^'"]+)['"]\]/g
-const URL_LITERAL = /https?:\/\/([a-zA-Z0-9.-]+(?::\d+)?)/g
-const INJECT_DECL = /export\s+const\s+inject\s*(?::[^=]+)?=\s*\[([^\]]*)\]/
+const URL_LITERAL = /https?:\/\/(?:[^@/\s'"]*@)?(\[[0-9a-fA-F:]+\]|[a-zA-Z0-9][a-zA-Z0-9.-]*)(?::\d+)?/g
+const INJECT_DECL = /\bexport\s+const\s+inject\s*(?::[^=]+)?=\s*\[([\s\S]*?)\]\s*(?:\n|$)/
+
+/** Local names one module specifier was bound to in a file. */
+interface ModuleBindings {
+  /** Whole-module bindings (default/namespace import, plain require, await import). */
+  namespaces: string[]
+  /** Named bindings: the local alias plus the export it refers to. */
+  named: { local: string; imported: string }[]
+}
+
+/** Parse a `{ a, b as c }` import clause into named bindings. */
+function parseNamedClause(clause: string): { local: string; imported: string }[] {
+  const named: { local: string; imported: string }[] = []
+  for (const entry of clause.split(',')) {
+    const trimmed = entry.trim().replace(/^type\s+/, '')
+    if (trimmed === '') continue
+    const parts = trimmed.split(/\s+as\s+/)
+    const imported = parts[0]?.trim()
+    if (!imported || !new RegExp(`^${IDENT}$`).test(imported)) continue
+    const local = (parts[1] ?? parts[0])?.trim()
+    if (local && new RegExp(`^${IDENT}$`).test(local)) named.push({ local, imported })
+  }
+  return named
+}
+
+/** Parse a `{ a, b: c }` require destructuring into named bindings. */
+function parseRequireClause(clause: string): { local: string; imported: string }[] {
+  const named: { local: string; imported: string }[] = []
+  for (const entry of clause.split(',')) {
+    const trimmed = entry.trim()
+    if (trimmed === '') continue
+    const parts = trimmed.split(/\s*:\s*/)
+    const imported = parts[0]?.trim()
+    if (!imported || !new RegExp(`^${IDENT}$`).test(imported)) continue
+    const local = (parts[1] ?? parts[0])?.trim()
+    if (local && new RegExp(`^${IDENT}$`).test(local)) named.push({ local, imported })
+  }
+  return named
+}
+
+/** Collect every module specifier a file binds, with its local names. */
+function collectBindings(content: string): Map<string, ModuleBindings> {
+  const bindings = new Map<string, ModuleBindings>()
+  const ensure = (specifier: string): ModuleBindings => {
+    let entry = bindings.get(specifier)
+    if (!entry) {
+      entry = { namespaces: [], named: [] }
+      bindings.set(specifier, entry)
+    }
+    return entry
+  }
+
+  const lines = content.split('\n')
+  lines.forEach((rawLine) => {
+    if (IMPORT_TYPE.test(rawLine)) return
+
+    IMPORT_NS.lastIndex = 0
+    let match: RegExpExecArray | null
+    while ((match = IMPORT_NS.exec(rawLine)) !== null) {
+      if (match[1] && match[2]) ensure(match[2]).namespaces.push(match[1])
+    }
+    IMPORT_NAMED.lastIndex = 0
+    while ((match = IMPORT_NAMED.exec(rawLine)) !== null) {
+      if (match[1] && match[2]) ensure(match[2]).named.push(...parseNamedClause(match[1]))
+    }
+    IMPORT_DEFAULT.lastIndex = 0
+    while ((match = IMPORT_DEFAULT.exec(rawLine)) !== null) {
+      if (match[1] && match[4]) ensure(match[4]).namespaces.push(match[1])
+      if (match[2] && match[4]) ensure(match[4]).named.push(...parseNamedClause(match[2]))
+      if (match[3] && match[4]) ensure(match[4]).namespaces.push(match[3])
+    }
+    IMPORT_SIDE_EFFECT.lastIndex = 0
+    while ((match = IMPORT_SIDE_EFFECT.exec(rawLine)) !== null) {
+      if (match[1]) ensure(match[1])
+    }
+    REQUIRE_NS.lastIndex = 0
+    while ((match = REQUIRE_NS.exec(rawLine)) !== null) {
+      if (match[1] && match[2]) ensure(match[2]).namespaces.push(match[1])
+    }
+    REQUIRE_NAMED.lastIndex = 0
+    while ((match = REQUIRE_NAMED.exec(rawLine)) !== null) {
+      if (match[1] && match[2]) ensure(match[2]).named.push(...parseRequireClause(match[1]))
+    }
+    AWAIT_IMPORT_NS.lastIndex = 0
+    while ((match = AWAIT_IMPORT_NS.exec(rawLine)) !== null) {
+      if (match[1] && match[2]) ensure(match[2]).namespaces.push(match[1])
+    }
+    DYNAMIC_IMPORT.lastIndex = 0
+    while ((match = DYNAMIC_IMPORT.exec(rawLine)) !== null) {
+      if (match[1]) ensure(match[1])
+    }
+    EXPORT_FROM.lastIndex = 0
+    while ((match = EXPORT_FROM.exec(rawLine)) !== null) {
+      if (match[1]) ensure(match[1])
+    }
+  })
+  return bindings
+}
+
+/** Build the call-site pattern for one family rule from the file's bindings. */
+function familyPattern(rule: FamilyRule, bindings: Map<string, ModuleBindings>): RegExp | undefined {
+  const namespaces = new Set<string>()
+  const locals = new Set<string>()
+  for (const [specifier, entry] of bindings) {
+    if (!rule.family.has(specifier)) continue
+    for (const ns of entry.namespaces) namespaces.add(ns)
+    for (const named of entry.named) {
+      if (rule.methods.includes(named.imported)) locals.add(named.local)
+    }
+  }
+  const alternatives: string[] = []
+  if (namespaces.size > 0) {
+    alternatives.push(`(?:${[...namespaces].join('|')})\\.(?:${rule.methods.join('|')})`)
+  }
+  if (locals.size > 0) {
+    alternatives.push(`(?<![.\\w])(?:${[...locals].join('|')})`)
+  }
+  if (alternatives.length === 0) return undefined
+  return new RegExp(`(?:${alternatives.join('|')})\\s*\\(`)
+}
 
 /** Per-file detection outcome: findings plus profile contributions. */
 export interface FileDetection {
@@ -123,29 +281,17 @@ export interface FileDetection {
   inject: string[]
 }
 
-function collectImports(content: string): Set<string> {
-  const modules = new Set<string>()
-  for (const pattern of [IMPORT_FROM, REQUIRE_CALL, DYNAMIC_IMPORT]) {
-    pattern.lastIndex = 0
-    let match: RegExpExecArray | null
-    while ((match = pattern.exec(content)) !== null) {
-      if (match[1]) modules.add(match[1])
-    }
-  }
-  return modules
-}
-
-function importsAny(modules: Set<string>, families: ReadonlySet<string>[]): boolean {
-  return families.some(family => [...family].some(specifier => modules.has(specifier)))
-}
-
 /**
  * Run every detection rule over one source file.
  * @param file - Collected source file.
  * @returns Findings and profile contributions for the file.
  */
 export function detectFile(file: SourceFile): FileDetection {
-  const modules = collectImports(file.content)
+  const bindings = collectBindings(file.content)
+  const activeFamilyRules = FAMILY_RULES
+    .map(rule => ({ rule, pattern: familyPattern(rule, bindings) }))
+    .filter((entry): entry is { rule: FamilyRule; pattern: RegExp } => entry.pattern !== undefined)
+
   const findings: Finding[] = []
   const envVars = new Set<string>()
   const sensitiveEnvVars = new Set<string>()
@@ -158,10 +304,10 @@ export function detectFile(file: SourceFile): FileDetection {
     const evidence = rawLine.trim().slice(0, 160)
     if (evidence === '') return
 
-    for (const rule of RULES) {
-      if (rule.requires && !importsAny(modules, rule.requires)) continue
-      rule.pattern.lastIndex = 0
-      if (rule.pattern.test(rawLine)) {
+    for (const { rule, pattern } of activeFamilyRules) {
+      pattern.lastIndex = 0
+      const match = pattern.exec(rawLine)
+      if (match) {
         findings.push({
           capability: rule.capability,
           severity: rule.severity,
@@ -169,6 +315,22 @@ export function detectFile(file: SourceFile): FileDetection {
           line,
           evidence,
           detail: rule.detail,
+          match: match[0],
+        })
+      }
+    }
+    for (const rule of STATIC_RULES) {
+      rule.pattern.lastIndex = 0
+      const match = rule.pattern.exec(rawLine)
+      if (match) {
+        findings.push({
+          capability: rule.capability,
+          severity: rule.severity,
+          file: file.relativePath,
+          line,
+          evidence,
+          detail: rule.detail,
+          match: match[1] ?? match[0],
         })
       }
     }
@@ -178,22 +340,41 @@ export function detectFile(file: SourceFile): FileDetection {
     while ((envMatch = ENV_DOT.exec(rawLine)) !== null) {
       const name = envMatch[1]
       if (!name) continue
+      envVars.add(name)
       if (SENSITIVE_ENV.test(name)) sensitiveEnvVars.add(name)
-      else envVars.add(name)
     }
     ENV_INDEX.lastIndex = 0
     while ((envMatch = ENV_INDEX.exec(rawLine)) !== null) {
       const name = envMatch[1]
       if (!name) continue
+      envVars.add(name)
       if (SENSITIVE_ENV.test(name)) sensitiveEnvVars.add(name)
-      else envVars.add(name)
     }
 
     URL_LITERAL.lastIndex = 0
     let urlMatch: RegExpExecArray | null
     while ((urlMatch = URL_LITERAL.exec(rawLine)) !== null) {
       const host = urlMatch[1]
-      if (host) hosts.add(host.replace(/:\d+$/, '').toLowerCase())
+      if (host) hosts.add(host.replace(/\.$/, '').toLowerCase())
+    }
+
+    // Flag network-library imports at the line where they appear.
+    SPECIFIER_USE.lastIndex = 0
+    let specifierMatch: RegExpExecArray | null
+    const flagged = new Set<string>()
+    while ((specifierMatch = SPECIFIER_USE.exec(rawLine)) !== null) {
+      const specifier = specifierMatch[1]
+      if (!specifier || !MODULES.networkLibs.has(specifier) || flagged.has(specifier)) continue
+      flagged.add(specifier)
+      findings.push({
+        capability: 'network',
+        severity: 'notice',
+        file: file.relativePath,
+        line,
+        evidence,
+        detail: `Imports the HTTP client library "${specifier}".`,
+        match: specifier,
+      })
     }
   })
 
@@ -204,30 +385,9 @@ export function detectFile(file: SourceFile): FileDetection {
       file: file.relativePath,
       evidence: `process.env.${name}`,
       detail: 'Reads a credential-looking environment variable.',
+      match: name,
     })
   }
-
-  // Flag network-library imports at their import line.
-  lines.forEach((rawLine, index) => {
-    if (!/^\s*(import\b|const\b|let\b|var\b)/.test(rawLine)) return
-    IMPORT_FROM.lastIndex = 0
-    REQUIRE_CALL.lastIndex = 0
-    for (const pattern of [IMPORT_FROM, REQUIRE_CALL]) {
-      pattern.lastIndex = 0
-      const match = pattern.exec(rawLine)
-      const specifier = match?.[1]
-      if (specifier && MODULES.networkLibs.has(specifier)) {
-        findings.push({
-          capability: 'network',
-          severity: 'notice',
-          file: file.relativePath,
-          line: index + 1,
-          evidence: rawLine.trim().slice(0, 160),
-          detail: `Imports the HTTP client library "${specifier}".`,
-        })
-      }
-    }
-  })
 
   const injectMatch = INJECT_DECL.exec(file.content)
   if (injectMatch?.[1]) {

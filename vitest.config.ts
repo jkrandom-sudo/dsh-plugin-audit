@@ -4,6 +4,5 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.spec.ts'],
     environment: 'node',
-    pool: 'forks',
   },
 })

@@ -5,24 +5,11 @@
 
 import type { Context } from 'cordis'
 
+import type { PendingExecution, PreToolDecision } from '../events.ts'
 import { evaluateCall, type SentinelRuleConfig } from './rules.ts'
 
 export { evaluateCall } from './rules.ts'
 export type { SentinelRuleConfig, SentinelVerdict } from './rules.ts'
-
-/** Minimal shape of the pending call the pipeline waterfall hands over. */
-interface PendingExecution {
-  name?: string
-  args?: unknown
-}
-
-/** Minimal decision vocabulary of the tools/pre-execute waterfall. */
-type PreToolDecision =
-  | { kind: 'allow' }
-  | { kind: 'deny'; reason: string }
-  | { kind: 'ask'; reason?: string }
-
-type WaterfallNext = () => Promise<PreToolDecision>
 
 /**
  * Install the sentinel as a `tools/pre-execute` waterfall listener.
@@ -40,8 +27,11 @@ export function installSentinel(
   config: SentinelRuleConfig,
   log: (message: string) => void = message => { ctx.logger.info(message) },
 ): () => void {
-  const listener = async (exec: PendingExecution, next: WaterfallNext): Promise<PreToolDecision> => {
-    const verdict = evaluateCall(exec.name ?? '', exec.args, config)
+  const listener = async (
+    exec: PendingExecution,
+    next: () => Promise<PreToolDecision>,
+  ): Promise<PreToolDecision> => {
+    const verdict = evaluateCall(exec.name ?? '', exec.arguments ?? exec.args, config)
     if (verdict.action === 'ask') {
       log(`sentinel: ask — ${verdict.reason}`)
       return { kind: 'ask', reason: verdict.reason }
@@ -49,7 +39,7 @@ export function installSentinel(
     return next()
   }
   // ctx.on returns its own disposer; the fiber also auto-disposes listeners.
-  const off = ctx.on('tools/pre-execute' as never, listener as never) as () => boolean
+  const off = ctx.on('tools/pre-execute', listener)
   return () => {
     off()
   }

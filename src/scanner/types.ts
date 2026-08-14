@@ -32,6 +32,8 @@ export interface Finding {
   evidence: string
   /** Human-readable explanation of why this was flagged. */
   detail: string
+  /** The actual matched substring (never truncated), for profile extraction. */
+  match?: string
 }
 
 /** Aggregate permission profile derived from findings. */
@@ -56,6 +58,8 @@ export interface PermissionProfile {
   dynamicExec: boolean
   /** Cordis services declared via `inject`. */
   inject: string[]
+  /** Declared runtime + peer dependency names. */
+  dependencies: string[]
   /** Bundle patch statistics. */
   patch: {
     /** Whether a cordis.patch.yml was found. */
@@ -83,6 +87,8 @@ export interface AuditReport {
     filesScanned: number
     /** True when the file walk hit its safety cap. */
     truncated: boolean
+    /** Files or directories skipped because they could not be read. */
+    skippedUnreadable?: number
   }
   /** Aggregate permission profile. */
   permissions: PermissionProfile

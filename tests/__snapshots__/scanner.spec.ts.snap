@@ -21,6 +21,7 @@ exports[`renderMarkdownCard > renders a stable snapshot for the clean fixture 1`
 | Credential paths | — |
 | Dynamic code execution | no |
 | Injected services | \`tools\` |
+| Declared dependencies | — |
 | Bundle patch | none |
 
 ---

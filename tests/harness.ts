@@ -44,16 +44,17 @@ export async function createPluginHarness(config: plugin.Config = {}) {
   }
 }
 
-/** Dispatch one tools/pre-execute waterfall, mirroring the host registry. */
+/**
+ * Dispatch one tools/pre-execute waterfall, mirroring the host registry.
+ *
+ * The host builds the execution object with parsed tool arguments in the
+ * `arguments` field (see ToolRuntime.createExecution) — the regression of
+ * reading `args` instead shipped a silent no-op sentinel in v0.1.x, so the
+ * harness deliberately dispatches the real host shape.
+ */
 export function dispatchPreExecute(
   ctx: Context,
-  exec: { name: string; args: unknown },
+  exec: { name: string; arguments: unknown },
 ): Promise<{ kind: string; reason?: string }> {
-  type Decision = { kind: string; reason?: string }
-  const dispatch = ctx.waterfall as (
-    name: string,
-    exec: { name: string; args: unknown },
-    inner: () => Promise<Decision>,
-  ) => Promise<Decision>
-  return dispatch('tools/pre-execute', exec, async () => ({ kind: 'allow' }))
+  return ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'allow' as const }))
 }

@@ -10,6 +10,8 @@
 
 import type { Context } from 'cordis'
 
+import type { PendingExecution, PostToolDecision } from './events.ts'
+
 const PACKAGE_NAME = 'dsh-plugin-audit'
 
 /** A package-attributed invariant failure reported by the host registry. */
@@ -29,15 +31,11 @@ export const name = 'dsh-plugin-audit-invariant'
 /** Service required before the companion can reserve package ownership. */
 export const inject = ['invariants']
 
-interface AuditExecution {
-  name?: string
-}
-
 interface AuditResultValue {
+  /** Failed tool calls carry isError and no value — they are not audit output. */
+  isError?: boolean
   value?: { writesPerformed?: boolean }
 }
-
-type PostToolDecision = { kind: 'accept' } | { kind: 'block'; feedback: unknown }
 
 /**
  * Watch plugin_audit results and enforce the read-only contract.
@@ -45,16 +43,20 @@ type PostToolDecision = { kind: 'accept' } | { kind: 'block'; feedback: unknown 
  * @param fail - Registry-provided failure reporter.
  */
 const install: InvariantInstaller = (ctx, fail) => {
-  ctx.on('tools/post-execute' as never, (async (
-    exec: AuditExecution,
+  ctx.on('tools/post-execute', async (
+    exec: PendingExecution,
     result: AuditResultValue,
     next: () => Promise<PostToolDecision>,
   ): Promise<PostToolDecision> => {
-    if (exec?.name === 'plugin_audit' && result?.value?.writesPerformed !== false) {
+    if (
+      exec?.name === 'plugin_audit'
+      && result?.isError !== true
+      && result?.value?.writesPerformed !== false
+    ) {
       fail('plugin_audit result lost its read-only marker (writesPerformed !== false)')
     }
     return next()
-  }) as never)
+  })
 }
 
 /**
