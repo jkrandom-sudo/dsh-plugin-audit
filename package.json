@@ -1,7 +1,7 @@
 {
   "name": "dsh-plugin-audit",
   "description": "Security audit plugin for DeepSeek Harness: static permission profiling and a runtime sentinel for third-party plugins",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": false,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
