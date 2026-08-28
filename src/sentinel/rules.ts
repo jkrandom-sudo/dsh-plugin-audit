@@ -72,6 +72,22 @@ function serialized(args: unknown): string {
 }
 
 /**
+ * Write tools name their target differently across hosts (`path`, `file_path`,
+ * …). Rule 3 judges the write *target* only — matching the serialized args
+ * would also scan the file body, so a README that merely mentions `~/.zshrc`
+ * would be refused as if it overwrote `~/.zshrc` itself.
+ */
+function writeTargetOf(args: unknown): string | undefined {
+  if (typeof args !== 'object' || args === null) return undefined
+  const record = args as Record<string, unknown>
+  for (const key of ['file_path', 'path', 'filePath', 'target_file', 'notebook_path']) {
+    const value = record[key]
+    if (typeof value === 'string') return value
+  }
+  return undefined
+}
+
+/**
  * Evaluate one pending tool call against the sentinel rule set.
  * @param name - Registered tool name (e.g. `bash`, `read`).
  * @param args - Parsed tool arguments.
@@ -86,7 +102,7 @@ export function evaluateCall(name: string, args: unknown, config: SentinelRuleCo
   if (credentialMatch?.[1]) {
     return {
       action: 'ask',
-      reason: `Tool "${name}" references the credential path "${credentialMatch[1]}". Approve only if you expected this access.`,
+      reason: `dsh-plugin-audit sentinel rule 1 (credential path): Tool "${name}" references the credential path "${credentialMatch[1]}". Approve only if you expected this access.`,
     }
   }
 
@@ -114,7 +130,7 @@ export function evaluateCall(name: string, args: unknown, config: SentinelRuleCo
         if (!hostAllowed(host, config.allowedHosts)) {
           return {
             action: 'ask',
-            reason: `Tool "${name}" runs ${executable} toward "${host}", which is not in allowedHosts. Outbound data movement needs your confirmation.`,
+            reason: `dsh-plugin-audit sentinel rule 2 (shell egress): Tool "${name}" runs ${executable} toward "${host}", which is not in allowedHosts. Outbound data movement needs your confirmation.`,
           }
         }
       }
@@ -122,13 +138,14 @@ export function evaluateCall(name: string, args: unknown, config: SentinelRuleCo
   }
 
   // Rule 3: path-carrying write tools aimed at home-directory dotfiles
-  // (credential paths already returned via rule 1).
+  // (credential paths already returned via rule 1). Only the write *target*
+  // is matched — the file body may legitimately quote dotfile paths.
   if (name === 'write' || name === 'edit' || name === 'str_replace_editor') {
-    const dotfile = HOME_DOTFILE.exec(text)?.[0]
-    if (dotfile) {
+    const target = writeTargetOf(args)
+    if (target && HOME_DOTFILE.test(target)) {
       return {
         action: 'ask',
-        reason: `Tool "${name}" writes to the home-directory dotfile path "${dotfile}". Confirm this configuration change.`,
+        reason: `dsh-plugin-audit sentinel rule 3 (home-dotfile write): Tool "${name}" writes to the home-directory dotfile path "${target}". Confirm this configuration change.`,
       }
     }
   }

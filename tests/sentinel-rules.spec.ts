@@ -123,4 +123,28 @@ describe('evaluateCall — home dotfile writes (rule 3)', () => {
     expect(evaluateCall('bash', { command: 'echo hi > ~/.bashrc' }, config))
       .toEqual({ action: 'pass' })
   })
+
+  // Regression for https://github.com/jkrandom-sudo/dsh-plugin-audit/issues/5:
+  // rule 3 judges the write *target*, never the file body.
+  it.each([
+    [{ path: 'AGENTS.md', content: 'Global rules live in ~/.dsh/rules.md' }],
+    [{ file_path: 'README.md', content: 'Edit ~/.zshrc or $HOME/.config/x to enable' }],
+    [{ path: 'docs/setup.md', content: 'Binaries install to /Users/user/.local/bin' }],
+    [{ path: 'docs/setup.md', content: 'Binaries install to /home/user/.local/bin' }],
+  ])('passes writes whose content merely quotes a dotfile path: %o', args => {
+    expect(evaluateCall('write', args, config)).toEqual({ action: 'pass' })
+  })
+
+  it('passes write calls without a recognizable target path field', () => {
+    expect(evaluateCall('write', { destination: '~/.bashrc' }, config))
+      .toEqual({ action: 'pass' })
+  })
+
+  it('names the plugin and rule in the ask reason', () => {
+    const verdict = evaluateCall('write', { path: '~/.zshrc' }, config)
+    expect(verdict).toMatchObject({ action: 'ask' })
+    if (verdict.action === 'ask') {
+      expect(verdict.reason).toContain('dsh-plugin-audit sentinel rule 3')
+    }
+  })
 })
