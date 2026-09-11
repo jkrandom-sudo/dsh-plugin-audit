@@ -158,6 +158,10 @@ Layout: `src/scanner/` is a harness-agnostic pure engine (walk → detect → ma
 
 The package also ships its TypeScript sources and a `./src/*` export, following the official [`dsh-external/plugin-template`](https://github.com/dsh-external/plugin-template) convention: DSH's development tooling can load a linked plugin straight from source (e.g. for HMR during plugin development), without waiting for a rebuild.
 
+## Ecosystem
+
+This project covers the runtime half of plugin auditing — permission profiling plus a sentinel that watches live tool calls. For the pre-install half, [dsh-vet](https://github.com/rogerdigital/dsh-vet) statically vets a plugin before you install it (permission & supply-chain rules, emitted as the open [`dsh-vet/v1`](https://github.com/rogerdigital/dsh-vet/blob/main/docs/dsh-vet-v1.md) report). The two approaches cover different failure modes — obfuscated payloads surface statically, some behavior only emerges live — so they complement rather than replace each other.
+
 ## License & security
 
 MIT — see [LICENSE](./LICENSE).

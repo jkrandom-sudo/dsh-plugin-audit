@@ -158,6 +158,10 @@ pnpm build       # tsc -b && tsdown -> lib/
 
 本包同时发布 TypeScript 源码并提供 `./src/*` export，遵循官方 [`dsh-external/plugin-template`](https://github.com/dsh-external/plugin-template) 约定：DSH 的开发工具可以直接从源码加载 link 安装的插件（例如插件开发时的 HMR），无需等待重新构建。
 
+## 相关生态
+
+本项目覆盖插件审计的运行时半边——权限画像加上监视实时工具调用的哨兵。安装前的另一半可参见 [dsh-vet](https://github.com/rogerdigital/dsh-vet)：在插件安装前做静态审查（权限与供应链规则，产出开放的 [`dsh-vet/v1`](https://github.com/rogerdigital/dsh-vet/blob/main/docs/dsh-vet-v1.md) 报告）。两种方式覆盖不同的失败模式——混淆 payload 在静态侧显现，某些行为只在运行时出现——因此互为补充而非替代。
+
 ## 许可与安全
 
 MIT —— 见 [LICENSE](./LICENSE)。
